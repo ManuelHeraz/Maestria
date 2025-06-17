@@ -1,0 +1,349 @@
+---
+title: "Grupos"
+author: "Manuel HD"
+date: "2025-06-15"
+output: html_document
+---
+
+Instalacion de Paquetes
+```{r setup, include=TRUE}
+
+# Cargar librerías necesarias
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("readxl")) install.packages("readxl")
+if (!require("ggpubr")) install.packages("ggpubr")
+if (!require("outliers")) install.packages("outliers")
+if (!require("car")) install.packages("car")
+if (!require("ggsignif")) install.packages("ggsignif")  # para asteriscos
+if (!require("rstatix")) install.packages("rstatix")    # para pruebas estadísticas sencillas
+if (!require("janitor")) install.packages("janitor")
+if (!require("drc")) install.packages("drc")
+
+```
+
+llamar paquetes
+```{r setup, include=TRUE}
+library(drc)
+library(janitor)
+library(tidyverse)
+library(readxl)
+library(ggpubr)
+library(outliers)
+library(car)
+library(ggsignif)
+library(rstatix)
+library(ggpubr)
+```
+
+Lectura de datos
+```{r setup, include=TRUE}
+# Leer datos desde archivo CSV tidy exportado desde Excel
+datos <- read_csv("ViabilidadCelularTidy.csv") %>%
+  janitor::clean_names()  # estandariza nombres
+
+# Eliminar columnas duplicadas o conflictivas
+datos <- datos %>%
+  select(grupo, concentracion, vivas, muertas, total, viabilidad, replica)
+
+# Asegúrate de que Concentracion es factor
+datos <- datos %>%
+  mutate(
+    Grupo = as.factor(grupo),
+    Concentracion = as.factor(concentracion),
+    Replica = as.factor(replica)
+  )
+# Vista previa
+glimpse(datos)
+
+# Convertir a factores
+datos <- datos %>%
+  mutate(
+    Grupo = as.factor(Grupo),
+    Concentracion = as.factor(Concentracion),
+    Replica = as.factor(Replica)
+  )
+
+datos <- datos %>%
+    filter(!is.na(Concentracion))
+
+```
+
+graficos de datos
+```{r setup, include=TRUE}
+#//////////////////////////////////////////////////////////////////
+# 1️⃣ TOTAL DE CÉLULAS VS CONCENTRACIÓN (curva con SD y puntos)
+
+# Calcular estadísticas por grupo
+total_stats <- datos %>%
+  group_by(concentracion) %>%
+  summarise(
+    media_total = mean(total),
+    sd_total = sd(total),
+    se_total = sd_total / sqrt(n())
+  )
+
+# Gráfico
+ggplot(datos, aes(x = concentracion, y = total)) +
+  geom_jitter(width = 0.1, alpha = 0.5, color = "darkblue") +
+  geom_point(data = total_stats, aes(y = media_total), size = 3, color = "blue") +
+  geom_errorbar(data = total_stats, aes(y = media_total, ymin = media_total - sd_total, ymax = media_total + sd_total), width = 0.2, color = "blue") +
+  labs(title = "Número total de células vs concentración de PBM-342",
+       x = "Concentración (µM)", y = "Total de células contadas") +
+  theme_minimal()
+```
+
+grafico viabilidad x concentracion
+```{r setup, include=TRUE}
+# --- Gráfico 1: Boxplot de viabilidad por concentración ---
+ggboxplot(datos, x = "concentracion", y = "viabilidad", 
+          color = "grupo", palette = "jco", 
+          add = "jitter", title = "Distribución de %Viabilidad por concentración")
+```
+
+estadistica descriptiva
+```{r setup, include=TRUE}
+# --- Estadísticas descriptivas ---
+stats <- datos %>%
+  group_by(grupo, concentracion) %>%
+  summarise(
+    media = mean(viabilidad, na.rm = TRUE),
+    sd = sd(viabilidad, na.rm = TRUE),
+    n = n(),
+    se = sd / sqrt(n())
+  )
+
+print(stats)
+
+```
+
+Coefiviente de variacion
+```{r setup, include=TRUE}
+
+# Agregar coeficiente de variación (CV)
+stats <- stats %>%
+  mutate(
+    cv = (sd / media) * 100  # CV en porcentaje
+  )
+
+print(stats)
+
+
+```
+
+replicas atipicas viabilidad
+```{r setup, include=TRUE}
+
+# Detectar valores atípicos por grupo (en viabilidad)
+outliers <- datos %>%
+  group_by(concentracion) %>%
+  mutate(
+    Q1 = quantile(viabilidad, 0.25),
+    Q3 = quantile(viabilidad, 0.75),
+    IQR = Q3 - Q1,
+    lower = Q1 - 1.5 * IQR,
+    upper = Q3 + 1.5 * IQR,
+    outlier = ifelse(viabilidad < lower | viabilidad > upper, TRUE, FALSE)
+  ) %>%
+  ungroup()
+
+# Mostrar solo outliers
+outliers %>% filter(outlier == TRUE)
+
+
+
+```
+
+replicas atipicas total celular
+```{r setup, include=TRUE}
+
+# Detectar valores atípicos por grupo (en total celular)
+outliers_total <- datos %>%
+  group_by(concentracion) %>%
+  mutate(
+    Q1 = quantile(total, 0.25),
+    Q3 = quantile(total, 0.75),
+    IQR = Q3 - Q1,
+    lower = Q1 - 1.5 * IQR,
+    upper = Q3 + 1.5 * IQR,
+    outlier = ifelse(total < lower | total > upper, TRUE, FALSE)
+  ) %>%
+  ungroup()
+
+# Mostrar solo los valores atípicos
+outliers_total %>% filter(outlier == TRUE)
+
+
+```
+
+prueba de normalidad por grupo shapiro
+```{r setup, include=TRUE}
+
+# --- Shapiro-Wilk para VIABILIDAD ---
+shapiro_viabilidad <- datos %>%
+  group_by(concentracion) %>%
+  filter(n() >= 3) %>%
+  shapiro_test(viabilidad)
+
+print(shapiro_viabilidad)
+
+# --- Shapiro-Wilk para TOTAL ---
+shapiro_total <- datos %>%
+  group_by(concentracion) %>%
+  filter(n() >= 3) %>%
+  shapiro_test(total)
+
+print(shapiro_total)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Kruskal-Wallis
+```{r setup, include=TRUE}
+
+#Viabilidad
+kruskal_test_result_v <- datos %>%
+  kruskal_test(viabilidad ~ concentracion)
+print(kruskal_test_result_v)
+
+#Total celular
+kruskal_test_result_t <- datos %>%
+  kruskal_test(total ~ concentracion)
+print(kruskal_test_result_t)
+
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Post hoc de Dunn con correcion de Bonferroni
+```{r setup, include=TRUE}
+#viabilidad
+posthoc_dunn_v <- datos %>%
+  dunn_test(viabilidad ~ concentracion, p.adjust.method = "bonferroni")
+print(posthoc_dunn_v)
+
+#total celular
+posthoc_dunn_t <- datos %>%
+  dunn_test(total ~ concentracion, p.adjust.method = "bonferroni")
+print(posthoc_dunn_t)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Post hoc de Dunn con correcion de Holm <-- Ojo sustituye posthoc dunn con bonferroni
+```{r setup, include=TRUE}
+#viabilidad
+posthoc_dunn_v <- datos %>%
+  dunn_test(viabilidad ~ concentracion, p.adjust.method = "holm")
+print(posthoc_dunn_v)
+
+#total celular
+posthoc_dunn_t <- datos %>%
+  dunn_test(total ~ concentracion, p.adjust.method = "holm")
+print(posthoc_dunn_t)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Grafico viabilidad
+```{r setup, include=TRUE}
+datos <- datos %>%
+  mutate(concentracion = as.factor(concentracion))
+
+pares_viabilidad_extra <- tibble::tribble(
+  ~group1, ~group2,
+  "0",     "50",
+  "0",     "200",
+  "50", "200"
+)
+
+# Crear pares significativos
+pares_v <- posthoc_dunn_v %>%
+  filter(p.adj <= 0.05) %>%
+  select(group1, group2, p.adj) %>%
+  mutate(
+    group1 = as.character(group1),
+    group2 = as.character(group2)
+  )
+
+pares_v_todos <- bind_rows(
+  pares_v,
+  pares_viabilidad_extra %>%
+    anti_join(pares_v, by = c("group1", "group2")) %>%
+    mutate(p.adj = NA)  # se dejarán sin asterisco, pero se grafican
+)
+
+# Gráfico para viabilidad
+ggplot(datos, aes(x = concentracion, y = viabilidad)) +
+  geom_jitter(width = 0.1, alpha = 0.5, color = "darkred") +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "red") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "red") +
+  geom_signif(
+    comparisons = split(pares_v_todos, seq(nrow(pares_v_todos))) %>%
+      purrr::map(~ c(.x$group1, .x$group2)),
+    annotations = ifelse(is.na(pares_v_todos$p.adj), "ns", round(pares_v_todos$p.adj, 3)),
+    map_signif_level = TRUE,
+    step_increase = 0.1
+  ) +
+  labs(
+    title = "Viabilidad celular vs concentración de PBM-342",
+    subtitle = "Kruskal-Wallis + Dunn post hoc (Bonferroni)",
+    x = "Concentración (µM)",
+    y = "% Viabilidad"
+  ) +
+  theme_minimal()
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Grafico total celular
+```{r setup, include=TRUE}
+pares_total_extra <- tibble::tribble(
+  ~group1, ~group2,
+  "0",     "50",
+  "0",     "200",
+  "1",     "50",
+  "1",     "200",
+  "1",     "0"
+)
+
+# Crear pares significativos
+pares_t <- posthoc_dunn_t %>%
+  filter(p.adj <= 0.05) %>%
+  select(group1, group2, p.adj) %>%
+  mutate(
+    group1 = as.character(group1),
+    group2 = as.character(group2)
+  )
+
+pares_t_todos <- bind_rows(
+  pares_t,
+  pares_total_extra %>%
+    anti_join(pares_t, by = c("group1", "group2")) %>%
+    mutate(p.adj = NA)
+)
+
+
+# Gráfico para total de células
+ggplot(datos, aes(x = concentracion, y = total)) +
+  geom_jitter(width = 0.1, alpha = 0.5, color = "darkblue") +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "blue") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "blue") +
+  geom_signif(
+    comparisons = split(pares_t_todos, seq(nrow(pares_t_todos))) %>%
+      purrr::map(~ c(.x$group1, .x$group2)),
+    annotations = ifelse(is.na(pares_t_todos$p.adj), "ns", round(pares_t_todos$p.adj, 3)),
+    map_signif_level = TRUE,
+    step_increase = 0.1
+  ) +
+  labs(
+    title = "Número total de células vs concentración de PBM-342",
+    subtitle = "Kruskal-Wallis + Dunn post hoc (Bonferroni)",
+    x = "Concentración (µM)",
+    y = "Total de células contadas"
+  ) +
+  theme_minimal()
+
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
