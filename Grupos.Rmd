@@ -197,6 +197,8 @@ print(shapiro_total)
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+dado que un grupo fallo shapiro procedere con una prueba no parametrica
+
 Kruskal-Wallis
 ```{r setup, include=TRUE}
 
@@ -346,4 +348,155 @@ ggplot(datos, aes(x = concentracion, y = total)) +
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+sin embargo, el grupo que fallo shapiro no tiene mucha varianza, ademas el n es muy bajo, shapiro tiene poca potencia
+por lo tanto realizare un analisis parametrico para confirmar los hallazgos.
 
+ANOVA viabilidad
+```{r setup, include=TRUE}
+# Evaluar homogeneidad de varianzas (requisito para ANOVA)
+leveneTest(viabilidad ~ Concentracion, data = datos)
+
+leveneTest(total ~ Concentracion, data = datos)
+
+datos <- datos %>%
+  mutate(concentracion = as.factor(concentracion))
+
+#no hay evidencia de que las varianzas difieran entre grupos por lo que el ANOVa es adecuado.
+anova_result <- aov(viabilidad ~ concentracion, data = datos)
+summary(anova_result)
+
+tukey_result <- TukeyHSD(anova_result)
+print(tukey_result)
+
+comparaciones_manual <- list(
+  c("0", "50"),
+  c("0", "200"),
+  c("1", "50"),
+  c("1", "200")
+)
+
+ggplot(datos, aes(x = concentracion, y = viabilidad)) +
+  geom_jitter(width = 0.1, alpha = 0.5, color = "darkred") +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "red") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "red") +
+  geom_signif(
+    comparisons = comparaciones_manual,
+    map_signif_level = TRUE,
+    step_increase = 0.12
+  ) +
+  labs(title = "Viabilidad celular vs concentración de PBM-342",
+       subtitle = "ANOVA de una vía + Tukey HSD post hoc",
+       x = "Concentración (µM)", y = "% Viabilidad") +
+  theme_minimal()
+
+```
+parece haber no diferencia significativa en %viabilidad entre grupos
+
+ANOVA total celular
+```{r setup, include=TRUE}
+# Reemplazar "1" por "DMSO" y ordenar los niveles
+datos <- datos %>%
+  mutate(
+    concentracion = as.character(concentracion),
+    concentracion = ifelse(concentracion == "1", "DMSO", concentracion),
+    concentracion = factor(concentracion, levels = c("0", "DMSO", "10", "25", "50", "75", "100", "200"))
+  )
+
+# ANOVA y Tukey
+anova_total <- aov(total ~ concentracion, data = datos)
+tukey_total <- TukeyHSD(anova_total)
+print(tukey_total)
+
+# Extraer comparaciones significativas
+pares_tukey <- as.data.frame(tukey_total$concentracion) %>%
+  rownames_to_column("comparacion") %>%
+  separate(comparacion, into = c("group1", "group2"), sep = "-") %>%
+  mutate(
+    group1 = ifelse(group1 == "1", "DMSO", group1),
+    group2 = ifelse(group2 == "1", "DMSO", group2)
+  )
+
+# Comparaciones manuales de interés
+pares_interes <- tribble(
+  ~group1, ~group2,
+  "0", "50",
+  "0", "200",
+  "DMSO", "50",
+  "DMSO", "200"
+)
+
+# Añadir p-valor desde tukey si existe
+pares_interes <- pares_interes %>%
+  rowwise() %>%
+  mutate(`p adj` = {
+    row <- filter(pares_tukey, (group1 == !!group1 & group2 == !!group2) | (group1 == !!group2 & group2 == !!group1))
+    if (nrow(row) > 0) row$`p adj` else NA_real_
+  }) %>%
+  ungroup()
+
+# Combinar con todas las comparaciones significativas que no estén repetidas
+pares_todos <- bind_rows(
+  pares_tukey %>% filter(`p adj` < 0.05),
+  pares_interes
+) %>%
+  distinct(group1, group2, .keep_all = TRUE)
+
+# Gráfico
+ggplot(datos, aes(x = concentracion, y = total)) +
+  geom_jitter(width = 0.1, alpha = 0.5, color = "darkblue") +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "blue") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "blue") +
+  geom_signif(
+    comparisons = split(pares_todos, seq(nrow(pares_todos))) %>%
+      purrr::map(~ c(.x$group1, .x$group2)),
+    annotations = round(pares_todos$`p adj`, 5),
+    map_signif_level = TRUE,
+    step_increase = 0.1
+  ) +
+  labs(
+    title = "Número total de células vs concentración de PBM-342",
+    subtitle = "ANOVA de una vía + Tukey HSD post hoc (incluye comparaciones específicas)",
+    x = "Concentración (µM)", y = "Total de células contadas"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+```
+existe una diferencia estadisticamente significativa entre grupos despues de 50 micromolar
+
+regresion lineal
+```{r setup, include=TRUE}
+# Filtrar DMSO y convertir concentración a numérica
+datos_filtrados <- datos %>%
+  filter(concentracion != "DMSO") %>%
+  mutate(concentracion_num = as.numeric(as.character(concentracion)))
+
+# Modelo lineal: Viabilidad
+modelo_viabilidad <- lm(viabilidad ~ concentracion_num, data = datos_filtrados)
+summary(modelo_viabilidad)
+
+ggplot(datos_filtrados, aes(x = concentracion_num, y = viabilidad)) +
+  geom_point(color = "firebrick") +
+  geom_smooth(method = "lm", se = TRUE, color = "black", linetype = "dashed") +
+  labs(
+    title = "Regresión lineal: Concentración de PBM-342 vs Viabilidad",
+    x = "Concentración de PBM-342 (µM)",
+    y = "% Viabilidad"
+  ) +
+  theme_minimal()
+
+# Modelo lineal: Total de células
+modelo_total <- lm(total ~ concentracion_num, data = datos_filtrados)
+summary(modelo_total)
+
+ggplot(datos_filtrados, aes(x = concentracion_num, y = total)) +
+  geom_point(color = "steelblue") +
+  geom_smooth(method = "lm", se = TRUE, color = "black", linetype = "dashed") +
+  labs(
+    title = "Regresión lineal: Concentración de PBM-342 vs Número total de células",
+    x = "Concentración de PBM-342 (µM)",
+    y = "Total de células"
+  ) +
+  theme_minimal()
+
+```
